@@ -1,0 +1,81 @@
+/**
+ * tts.js
+ * Text-to-speech engine using the Web Speech API.
+ * Falls back gracefully if the API is unavailable.
+ */
+
+const TTS = (() => {
+  const synth = window.speechSynthesis || null;
+  let voices = [];
+  let settings = {};
+
+  function init() {
+    settings = Storage.getSettings();
+    if (!synth) { console.warn("TTS: Web Speech API not available."); return; }
+
+    function loadVoices() {
+      voices = synth.getVoices();
+    }
+    loadVoices();
+    synth.addEventListener("voiceschanged", loadVoices);
+  }
+
+  function getVoices() { return voices; }
+
+  function getPreferredVoice(lang = "en-US") {
+    const saved = settings.ttsVoice;
+    if (saved) {
+      const found = voices.find(v => v.name === saved);
+      if (found) return found;
+    }
+    return voices.find(v => v.lang.startsWith(lang.split("-")[0])) || voices[0] || null;
+  }
+
+  function speak(text, options = {}) {
+    if (!synth || !settings.ttsEnabled) return;
+    if (!text || !text.trim()) return;
+
+    synth.cancel();
+
+    const utt = new SpeechSynthesisUtterance(text.trim());
+    utt.rate   = options.rate   || settings.ttsRate || 1.0;
+    utt.volume = options.volume || 1.0;
+    utt.pitch  = options.pitch  || 1.0;
+    utt.lang   = options.lang   || settings.language || "en-US";
+
+    const voice = getPreferredVoice(utt.lang);
+    if (voice) utt.voice = voice;
+
+    utt.onstart = () => { document.dispatchEvent(new CustomEvent("tts:start", { detail: { text } })); };
+    utt.onend   = () => { document.dispatchEvent(new CustomEvent("tts:end",   { detail: { text } })); };
+    utt.onerror = (e) => { console.error("TTS error:", e.error); };
+
+    synth.speak(utt);
+    Storage.incrementStat("totalSpeaks");
+  }
+
+  function stop() {
+    if (synth) synth.cancel();
+  }
+
+  function setRate(rate) {
+    settings.ttsRate = rate;
+    Storage.saveSetting("ttsRate", rate);
+  }
+
+  function setVoice(name) {
+    settings.ttsVoice = name;
+    Storage.saveSetting("ttsVoice", name);
+  }
+
+  function setEnabled(bool) {
+    settings.ttsEnabled = bool;
+    Storage.saveSetting("ttsEnabled", bool);
+  }
+
+  function isAvailable() { return !!synth; }
+
+  return { init, speak, stop, getVoices, setRate, setVoice, setEnabled, isAvailable };
+})();
+
+window.TTS = TTS;
