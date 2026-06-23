@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gesture Trainer – GestureSpeak</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" />
+  <link rel="stylesheet" href="../css/main.css" />
+</head>
+<body>
+<nav id="sidebar" aria-label="Main navigation">
+  <div class="brand"><i class="ti ti-hand-stop"></i><span>GestureSpeak</span></div>
+  <ul class="nav-links">
+    <li><a href="../index.html"><i class="ti ti-message-circle"></i> Communicate</a></li>
+    <li><a href="trainer.html" class="active" aria-current="page"><i class="ti ti-settings-2"></i> Gesture Trainer</a></li>
+    <li><a href="phrases.html"><i class="ti ti-list"></i> Phrase Library</a></li>
+    <li><a href="caregiver.html"><i class="ti ti-users"></i> Caregiver View</a></li>
+    <li><a href="history.html"><i class="ti ti-clock"></i> History</a></li>
+    <li><a href="settings.html"><i class="ti ti-settings"></i> Settings</a></li>
+  </ul>
+</nav>
+
+<main id="main-content">
+  <header class="topbar">
+    <button id="menu-toggle" class="icon-btn" aria-label="Toggle menu"><i class="ti ti-menu-2"></i></button>
+    <h1 class="page-title">Gesture Trainer</h1>
+  </header>
+
+  <div class="page-content">
+
+    <!-- Gesture → Phrase map -->
+    <div class="card">
+      <h2><i class="ti ti-link" aria-hidden="true"></i> Gesture mappings</h2>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:1rem">
+        Each gesture is mapped to a phrase. Edit the phrase or remap any gesture below.
+      </p>
+      <ul class="gesture-map-list" id="gesture-list"></ul>
+    </div>
+
+    <!-- Add custom mapping -->
+    <div class="card">
+      <h2><i class="ti ti-plus" aria-hidden="true"></i> Custom gesture shortcut</h2>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:1rem">
+        Map a gesture key to any custom phrase. Useful for personal expressions.
+      </p>
+      <div class="input-row">
+        <select id="custom-gesture-key" aria-label="Gesture">
+          <option value="OPEN_PALM">Open palm ✋</option>
+          <option value="CLOSED_FIST">Closed fist ✊</option>
+          <option value="THUMBS_UP">Thumbs up 👍</option>
+          <option value="THUMBS_DOWN">Thumbs down 👎</option>
+          <option value="VICTORY">Two fingers ✌</option>
+          <option value="POINTING_UP">Point up ☝</option>
+          <option value="CALL_ME">Call me 🤙</option>
+          <option value="WAVE">Wave 👋</option>
+        </select>
+        <input type="text" id="custom-phrase" placeholder="Enter phrase…" aria-label="Custom phrase" maxlength="120" />
+        <button class="btn btn-primary" id="save-custom-btn"><i class="ti ti-check"></i> Save</button>
+      </div>
+      <p id="custom-feedback" style="font-size:12px;color:var(--text-secondary);margin-top:6px"></p>
+    </div>
+
+    <!-- Stats card -->
+    <div class="card">
+      <h2><i class="ti ti-chart-bar" aria-hidden="true"></i> Session stats</h2>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:0.5rem">
+        <div style="background:var(--surface2);padding:1rem;border-radius:var(--radius-md);text-align:center">
+          <div style="font-size:24px;font-weight:500" id="stat-gestures">0</div>
+          <div style="font-size:12px;color:var(--text-muted)">Gestures used</div>
+        </div>
+        <div style="background:var(--surface2);padding:1rem;border-radius:var(--radius-md);text-align:center">
+          <div style="font-size:24px;font-weight:500" id="stat-phrases">0</div>
+          <div style="font-size:12px;color:var(--text-muted)">Quick phrases</div>
+        </div>
+        <div style="background:var(--surface2);padding:1rem;border-radius:var(--radius-md);text-align:center">
+          <div style="font-size:24px;font-weight:500" id="stat-speaks">0</div>
+          <div style="font-size:12px;color:var(--text-muted)">Times spoken</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="../js/storage.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  function renderList() {
+    const gestures = Storage.getGestures();
+    const list     = document.getElementById("gesture-list");
+    list.innerHTML = "";
+
+    gestures.forEach(g => {
+      const li = document.createElement("li");
+      li.innerHTML = `
+        <div class="gesture-icon">${g.icon}</div>
+        <span style="font-size:13px;color:var(--text-secondary);min-width:120px">${g.name}</span>
+        <span class="gesture-arrow"><i class="ti ti-arrow-right" aria-hidden="true"></i></span>
+        <span class="gesture-phrase" id="phrase-${g.id}">${g.phrase}</span>
+        <div class="gesture-actions">
+          <button class="small-btn" data-id="${g.id}" data-action="edit" aria-label="Edit ${g.name}">
+            <i class="ti ti-edit" aria-hidden="true"></i> Edit
+          </button>
+          <button class="small-btn danger" data-id="${g.id}" data-action="reset" aria-label="Reset ${g.name}">
+            <i class="ti ti-refresh" aria-hidden="true"></i>
+          </button>
+        </div>`;
+      list.appendChild(li);
+    });
+
+    list.querySelectorAll("[data-action=edit]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        const current = document.getElementById("phrase-" + id).textContent;
+        const newPhrase = prompt("New phrase for this gesture:", current);
+        if (newPhrase && newPhrase.trim()) {
+          Storage.updateGesturePhrase(id, newPhrase.trim());
+          renderList();
+        }
+      });
+    });
+
+    list.querySelectorAll("[data-action=reset]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (confirm("Reset this gesture to its default phrase?")) {
+          const defaults = [
+            { id:"g1", phrase:"Yes" }, { id:"g2", phrase:"No" },
+            { id:"g3", phrase:"I'm okay" }, { id:"g4", phrase:"Thank you" },
+            { id:"g5", phrase:"Help me" }, { id:"g6", phrase:"Please wait" },
+            { id:"g7", phrase:"I'm in pain" }, { id:"g8", phrase:"Call my family" },
+          ];
+          const def = defaults.find(d => d.id === btn.dataset.id);
+          if (def) { Storage.updateGesturePhrase(def.id, def.phrase); renderList(); }
+        }
+      });
+    });
+  }
+
+  document.getElementById("save-custom-btn").addEventListener("click", () => {
+    const key    = document.getElementById("custom-gesture-key").value;
+    const phrase = document.getElementById("custom-phrase").value.trim();
+    const fb     = document.getElementById("custom-feedback");
+    if (!phrase) { fb.textContent = "Please enter a phrase."; return; }
+
+    const gestures = Storage.getGestures();
+    const match = gestures.find(g => g.key === key);
+    if (match) {
+      Storage.updateGesturePhrase(match.id, phrase);
+      fb.textContent = `✓ "${match.name}" now says: "${phrase}"`;
+      renderList();
+    }
+    document.getElementById("custom-phrase").value = "";
+  });
+
+  const stats = Storage.getStats();
+  document.getElementById("stat-gestures").textContent = stats.totalGestures;
+  document.getElementById("stat-phrases").textContent  = stats.totalPhrases;
+  document.getElementById("stat-speaks").textContent   = stats.totalSpeaks;
+
+  // Mobile menu
+  document.getElementById("menu-toggle").addEventListener("click", () => {
+    document.getElementById("sidebar").classList.toggle("open");
+  });
+
+  renderList();
+});
+</script>
+</body>
+</html>
