@@ -1,0 +1,257 @@
+/**
+ * gestures.js
+ * Gesture recognition engine.
+ *
+ * Uses MediaPipe Hands for landmark detection, then classifies
+ * hand shapes via a rule-based classifier (no server required).
+ *
+ * Falls back to a randomised simulation when MediaPipe fails to load
+ * (e.g. browser blocks WASM) so the rest of the UI stays functional.
+ */
+
+const GestureEngine = (() => {
+
+  /* ───────────────────────────────── Config ── */
+  const CONFIDENCE_THRESHOLD = 0.75;
+  const HOLD_DURATION_MS     = 1200; // how long user must hold a gesture
+  const COOLDOWN_MS          = 1400; // min gap between triggers
+
+  let onGestureCallback   = null;
+  let lastGestureKey      = null;
+  let lastTriggerTime     = 0;
+  let holdTimer           = null;
+  let pendingGestureKey   = null;
+  let mediapipeReady      = false;
+  let simulationInterval  = null;
+
+  /* ── Landmark indices (MediaPipe 21-point hand model) ── */
+  const LM = {
+    WRIST:          0,
+    THUMB_CMC:      1, THUMB_MCP: 2, THUMB_IP: 3,  THUMB_TIP: 4,
+    INDEX_MCP:      5, INDEX_PIP: 6, INDEX_DIP: 7,  INDEX_TIP: 8,
+    MIDDLE_MCP:     9, MIDDLE_PIP:10, MIDDLE_DIP:11, MIDDLE_TIP:12,
+    RING_MCP:      13, RING_PIP:  14, RING_DIP:  15, RING_TIP:  16,
+    PINKY_MCP:     17, PINKY_PIP: 18, PINKY_DIP: 19, PINKY_TIP: 20,
+  };
+
+  /* ── Helpers ── */
+  function dist(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+  }
+
+  function isFingerExtended(lm, tip, pip) {
+    return lm[tip].y < lm[pip].y;
+  }
+
+  /* ── Rule-based classifier ── */
+  function classify(landmarks) {
+    const lm = landmarks;
+
+    const thumbUp    = lm[LM.THUMB_TIP].y < lm[LM.THUMB_IP].y;
+    const thumbDown  = lm[LM.THUMB_TIP].y > lm[LM.WRIST].y + 0.1;
+
+    const indexExt  = isFingerExtended(lm, LM.INDEX_TIP,  LM.INDEX_PIP);
+    const middleExt = isFingerExtended(lm, LM.MIDDLE_TIP, LM.MIDDLE_PIP);
+    const ringExt   = isFingerExtended(lm, LM.RING_TIP,   LM.RING_PIP);
+    const pinkyExt  = isFingerExtended(lm, LM.PINKY_TIP,  LM.PINKY_PIP);
+
+    const allFingers   = indexExt && middleExt && ringExt && pinkyExt;
+    const noFingers    = !indexExt && !middleExt && !ringExt && !pinkyExt;
+    const twoFingers   = indexExt && middleExt && !ringExt && !pinkyExt;
+    const onlyIndex    = indexExt && !middleExt && !ringExt && !pinkyExt;
+    const onlyPinky    = !indexExt && !middleExt && !ringExt && pinkyExt;
+    const thumbAndPinky = !indexExt && !middleExt && !ringExt && pinkyExt && thumbUp;
+
+    /* Thumbs up */
+    if (thumbUp && noFingers && !onlyPinky) return { key: "THUMBS_UP",   confidence: 0.90 };
+
+    /* Thumbs down */
+    if (thumbDown && noFingers) return { key: "THUMBS_DOWN", confidence: 0.85 };
+
+    /* Open palm */
+    if (allFingers && thumbUp) return { key: "OPEN_PALM",   confidence: 0.92 };
+
+    /* Closed fist */
+    if (noFingers && !thumbUp) return { key: "CLOSED_FIST", confidence: 0.88 };
+
+    /* Victory / two fingers */
+    if (twoFingers) return { key: "VICTORY",     confidence: 0.87 };
+
+    /* Pointing up */
+    if (onlyIndex) return { key: "POINTING_UP",  confidence: 0.85 };
+
+    /* Call me sign (thumb + pinky) */
+    if (thumbAndPinky) return { key: "CALL_ME",    confidence: 0.83 };
+
+    return null;
+  }
+
+  /* ── Phrase resolution ── */
+  function resolvePhrase(gestureKey) {
+    const gestures = Storage.getGestures();
+    const match    = gestures.find(g => g.key === gestureKey);
+    return match || null;
+  }
+
+  /* ── Gesture trigger logic (hold + cooldown) ── */
+  function onLandmark(gestureKey, confidence) {
+    const now = Date.now();
+
+    if (gestureKey !== pendingGestureKey) {
+      clearTimeout(holdTimer);
+      pendingGestureKey = gestureKey;
+
+      document.dispatchEvent(new CustomEvent("gesture:pending", {
+        detail: { gestureKey, confidence }
+      }));
+
+      holdTimer = setTimeout(() => {
+        if (now - lastTriggerTime < COOLDOWN_MS) return;
+        const gestureData = resolvePhrase(gestureKey);
+        if (!gestureData) return;
+
+        lastGestureKey  = gestureKey;
+        lastTriggerTime = Date.now();
+        pendingGestureKey = null;
+
+        Storage.incrementStat("totalGestures");
+        Storage.addHistory({ gesture: gestureData.name, phrase: gestureData.phrase, confidence });
+
+        document.dispatchEvent(new CustomEvent("gesture:detected", {
+          detail: { ...gestureData, confidence }
+        }));
+
+        if (onGestureCallback) onGestureCallback(gestureData, confidence);
+      }, HOLD_DURATION_MS);
+    }
+  }
+
+  /* ── MediaPipe integration ── */
+  function startMediaPipe(videoEl, canvasEl) {
+    if (typeof Hands === "undefined") {
+      console.warn("GestureEngine: MediaPipe not loaded. Using simulation.");
+      startSimulation();
+      return;
+    }
+
+    const hands = new Hands({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands:          1,
+      modelComplexity:      1,
+      minDetectionConfidence:  CONFIDENCE_THRESHOLD,
+      minTrackingConfidence:   0.5,
+    });
+
+    hands.onResults((results) => {
+      drawLandmarks(results, canvasEl, videoEl);
+
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        clearTimeout(holdTimer);
+        pendingGestureKey = null;
+        document.dispatchEvent(new CustomEvent("gesture:none"));
+        return;
+      }
+
+      const landmarks = results.multiHandLandmarks[0];
+      const result    = classify(landmarks);
+
+      if (result && result.confidence >= CONFIDENCE_THRESHOLD) {
+        onLandmark(result.key, result.confidence);
+      } else {
+        clearTimeout(holdTimer);
+        pendingGestureKey = null;
+      }
+    });
+
+    const camera = new Camera(videoEl, {
+      onFrame: async () => { await hands.send({ image: videoEl }); },
+      width: 640,
+      height: 480,
+    });
+
+    camera.start()
+      .then(() => {
+        mediapipeReady = true;
+        document.dispatchEvent(new CustomEvent("gesture:engine-ready", { detail: { mode: "mediapipe" } }));
+      })
+      .catch((err) => {
+        console.error("MediaPipe camera failed:", err);
+        startSimulation();
+      });
+  }
+
+  /* ── Canvas drawing ── */
+  function drawLandmarks(results, canvas, video) {
+    const ctx = canvas.getContext("2d");
+    canvas.width  = video.videoWidth  || canvas.offsetWidth;
+    canvas.height = video.videoHeight || canvas.offsetHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!results.multiHandLandmarks) return;
+
+    for (const landmarks of results.multiHandLandmarks) {
+      if (typeof drawConnectors !== "undefined") {
+        drawConnectors(ctx, landmarks, HAND_CONNECTIONS, { color: "#1D9E75", lineWidth: 2 });
+        drawLandmarks(ctx, landmarks, { color: "#5DCAA5", lineWidth: 1, radius: 4 });
+      } else {
+        landmarks.forEach((pt, i) => {
+          const x = pt.x * canvas.width;
+          const y = pt.y * canvas.height;
+          ctx.beginPath();
+          ctx.arc(x, y, i === 0 ? 6 : 3, 0, Math.PI * 2);
+          ctx.fillStyle = i === 0 ? "#1D9E75" : "#5DCAA5";
+          ctx.fill();
+        });
+      }
+    }
+  }
+
+  /* ── Simulation mode (fallback) ── */
+  function startSimulation() {
+    const sim = Storage.getGestures();
+    document.dispatchEvent(new CustomEvent("gesture:engine-ready", { detail: { mode: "simulation" } }));
+
+    simulationInterval = setInterval(() => {
+      const g = sim[Math.floor(Math.random() * sim.length)];
+      const confidence = 0.78 + Math.random() * 0.18;
+
+      document.dispatchEvent(new CustomEvent("gesture:pending", {
+        detail: { gestureKey: g.key, confidence }
+      }));
+
+      setTimeout(() => {
+        Storage.incrementStat("totalGestures");
+        Storage.addHistory({ gesture: g.name, phrase: g.phrase, confidence });
+
+        document.dispatchEvent(new CustomEvent("gesture:detected", {
+          detail: { ...g, confidence }
+        }));
+
+        if (onGestureCallback) onGestureCallback(g, confidence);
+      }, HOLD_DURATION_MS);
+    }, 3800);
+  }
+
+  function stopSimulation() {
+    clearInterval(simulationInterval);
+    simulationInterval = null;
+  }
+
+  /* ── Public API ── */
+  function init(videoEl, canvasEl, callback) {
+    onGestureCallback = callback;
+    startMediaPipe(videoEl, canvasEl);
+  }
+
+  function onGesture(cb) { onGestureCallback = cb; }
+
+  function isReady() { return mediapipeReady; }
+
+  return { init, onGesture, isReady, stopSimulation };
+})();
+
+window.GestureEngine = GestureEngine;
