@@ -1,0 +1,51 @@
+/**
+ * phrases.js
+ * Renders the quick-phrase grid and manages phrase state.
+ */
+
+const PhraseManager = (() => {
+
+  let onSelectCallback = null;
+
+  function init(gridEl, onSelect) {
+    onSelectCallback = onSelect;
+    render(gridEl);
+  }
+
+  function render(gridEl) {
+    if (!gridEl) return;
+    const phrases = Storage.getPhrases();
+    gridEl.innerHTML = "";
+
+    phrases.forEach(p => {
+      const btn = document.createElement("button");
+      btn.className = `phrase-btn category-${p.category}`;
+      btn.setAttribute("data-id", p.id);
+      btn.setAttribute("aria-label", p.text);
+      btn.innerHTML = `<i class="ti ${p.icon}" aria-hidden="true"></i>${p.text}`;
+
+      btn.addEventListener("click", () => {
+        select(p.text, btn);
+      });
+
+      gridEl.appendChild(btn);
+    });
+  }
+
+  function select(text, btnEl) {
+    if (btnEl) {
+      btnEl.classList.add("active");
+      setTimeout(() => btnEl.classList.remove("active"), 400);
+    }
+    Storage.incrementStat("totalPhrases");
+    if (onSelectCallback) onSelectCallback(text);
+  }
+
+  function refresh(gridEl) {
+    render(gridEl);
+  }
+
+  return { init, select, refresh };
+})();
+
+window.PhraseManager = PhraseManager;
