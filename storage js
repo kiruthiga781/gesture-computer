@@ -1,0 +1,150 @@
+/**
+ * storage.js
+ * Thin wrapper around localStorage (and optionally IndexedDB)
+ * for persisting gestures, phrases, history, and settings.
+ */
+
+const Storage = (() => {
+  const PREFIX = "gestspeak_";
+
+  function key(k) { return PREFIX + k; }
+
+  function get(k, fallback = null) {
+    try {
+      const raw = localStorage.getItem(key(k));
+      return raw !== null ? JSON.parse(raw) : fallback;
+    } catch { return fallback; }
+  }
+
+  function set(k, v) {
+    try { localStorage.setItem(key(k), JSON.stringify(v)); return true; }
+    catch { return false; }
+  }
+
+  function remove(k) {
+    localStorage.removeItem(key(k));
+  }
+
+  /* ── Phrases ── */
+  const DEFAULT_PHRASES = [
+    { id: "p1",  text: "Yes",               category: "basic",  icon: "ti-check" },
+    { id: "p2",  text: "No",                category: "basic",  icon: "ti-x" },
+    { id: "p3",  text: "Thank you",         category: "social", icon: "ti-heart" },
+    { id: "p4",  text: "Please wait",       category: "social", icon: "ti-clock" },
+    { id: "p5",  text: "I need water",      category: "needs",  icon: "ti-droplet" },
+    { id: "p6",  text: "I'm hungry",        category: "needs",  icon: "ti-bowl-spoon" },
+    { id: "p7",  text: "I'm in pain",       category: "urgent", icon: "ti-alert-triangle" },
+    { id: "p8",  text: "Help me",           category: "urgent", icon: "ti-sos" },
+    { id: "p9",  text: "I'm okay",          category: "basic",  icon: "ti-mood-smile" },
+    { id: "p10", text: "Call my family",    category: "urgent", icon: "ti-phone" },
+    { id: "p11", text: "Bathroom please",   category: "needs",  icon: "ti-door" },
+    { id: "p12", text: "Not right now",     category: "basic",  icon: "ti-hand-stop" },
+    { id: "p13", text: "I love you",        category: "social", icon: "ti-heart" },
+    { id: "p14", text: "Good morning",      category: "social", icon: "ti-sun" },
+    { id: "p15", text: "I'm tired",         category: "needs",  icon: "ti-zzz" },
+    { id: "p16", text: "Can you repeat?",   category: "basic",  icon: "ti-repeat" },
+  ];
+
+  function getPhrases() {
+    return get("phrases", DEFAULT_PHRASES);
+  }
+
+  function savePhrases(phrases) {
+    return set("phrases", phrases);
+  }
+
+  function addPhrase(text, category = "basic", icon = "ti-message") {
+    const phrases = getPhrases();
+    const id = "p" + Date.now();
+    phrases.push({ id, text, category, icon });
+    savePhrases(phrases);
+    return id;
+  }
+
+  function deletePhrase(id) {
+    const phrases = getPhrases().filter(p => p.id !== id);
+    savePhrases(phrases);
+  }
+
+  /* ── Gesture Mappings ── */
+  const DEFAULT_GESTURES = [
+    { id: "g1", name: "Open palm",     key: "OPEN_PALM",      phrase: "Yes",           icon: "✋" },
+    { id: "g2", name: "Closed fist",   key: "CLOSED_FIST",    phrase: "No",            icon: "✊" },
+    { id: "g3", name: "Thumbs up",     key: "THUMBS_UP",      phrase: "I'm okay",      icon: "👍" },
+    { id: "g4", name: "Two fingers",   key: "VICTORY",        phrase: "Thank you",     icon: "✌" },
+    { id: "g5", name: "Point up",      key: "POINTING_UP",    phrase: "Help me",       icon: "☝" },
+    { id: "g6", name: "Wave / open",   key: "WAVE",           phrase: "Please wait",   icon: "👋" },
+    { id: "g7", name: "Thumbs down",   key: "THUMBS_DOWN",    phrase: "I'm in pain",   icon: "👎" },
+    { id: "g8", name: "Call me sign",  key: "CALL_ME",        phrase: "Call my family",icon: "🤙" },
+  ];
+
+  function getGestures() {
+    return get("gestures", DEFAULT_GESTURES);
+  }
+
+  function saveGestures(gestures) {
+    return set("gestures", gestures);
+  }
+
+  function updateGesturePhrase(id, phrase) {
+    const gestures = getGestures().map(g => g.id === id ? { ...g, phrase } : g);
+    saveGestures(gestures);
+  }
+
+  /* ── History ── */
+  function getHistory() {
+    return get("history", []);
+  }
+
+  function addHistory(entry) {
+    const history = getHistory();
+    history.unshift({ ...entry, time: new Date().toISOString() });
+    if (history.length > 200) history.splice(200);
+    set("history", history);
+  }
+
+  /* ── Settings ── */
+  const DEFAULT_SETTINGS = {
+    ttsRate:         1.0,
+    ttsVoice:        "",
+    ttsEnabled:      true,
+    autoSpeak:       false,
+    showConfidence:  true,
+    gestureDelay:    1200,
+    theme:           "auto",
+    emergencyMsg:    "I need immediate help. This is an emergency.",
+    language:        "en-US",
+  };
+
+  function getSettings() {
+    return { ...DEFAULT_SETTINGS, ...get("settings", {}) };
+  }
+
+  function saveSetting(key, value) {
+    const s = getSettings();
+    s[key] = value;
+    set("settings", s);
+  }
+
+  /* ── Session Stats ── */
+  function incrementStat(stat) {
+    const stats = get("stats", { totalGestures: 0, totalPhrases: 0, totalSpeaks: 0 });
+    stats[stat] = (stats[stat] || 0) + 1;
+    set("stats", stats);
+  }
+
+  function getStats() {
+    return get("stats", { totalGestures: 0, totalPhrases: 0, totalSpeaks: 0 });
+  }
+
+  return {
+    get, set, remove,
+    getPhrases, savePhrases, addPhrase, deletePhrase,
+    getGestures, saveGestures, updateGesturePhrase,
+    getHistory, addHistory,
+    getSettings, saveSetting,
+    incrementStat, getStats,
+  };
+})();
+
+window.Storage = Storage;
